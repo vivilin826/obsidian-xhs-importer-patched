@@ -4,6 +4,19 @@
 
 这是 [bnchiang96/xiaohongshu-importer](https://github.com/bnchiang96/xiaohongshu-importer) 的补丁版本（MIT 协议，原作者署名见 `LICENSE`）。原版在 2026 年小红书改版后失效：正文还能进来，图片和视频全部丢失，本仓库针对这一点做了修复。
 
+## 最快安装：只替换一个文件（推荐给已装原版的人）
+
+如果你**已经装了原版** `Xiaohongshu Importer`，不需要卸载也不需要重装，设置都会保留：
+
+1. Obsidian → 设置 → 第三方插件 → 把 `Xiaohongshu Importer` 的开关**关掉**；
+2. 进入你的库里的这个目录：`<你的库>/.obsidian/plugins/xiaohongshu-importer/`
+   - Mac 访达按 `Command + Shift + G`，粘贴 `~/Documents/你的库/.obsidian/plugins/xiaohongshu-importer`
+   - Windows 地址栏粘贴 `D:\你的库\.obsidian\plugins\xiaohongshu-importer`，看不到 `.obsidian` 就勾选「隐藏的项目」
+3. 把原来的 `main.js` 改名成 `main.js.bak`（备份），再把本仓库 Release 里的 `main.js` 拖进去替换；
+4. 回到 Obsidian 把开关**重新打开**，导入一条链接验证。
+
+更详细的图文步骤见仓库里的 [`INSTALL.txt`](./INSTALL.txt)，或直接下载 Release 里的 `小红书插件补丁.zip`（含 `main.js` + 说明）。
+
 ## 为什么原版会失效
 
 2026 年小红书改了分享页的访问策略和页面结构：
