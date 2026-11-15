@@ -1,0 +1,52 @@
+小红书插件 · 补丁安装说明
+================================
+
+说明：你本来就已经装了 Xiaohongshu Importer 这个插件，只是它现在下不了图片和视频。
+      这个补丁只做一件事 —— 把插件里的 main.js 换掉。不用卸载，不用重装，设置都保留。
+
+
+【第一步】先把插件关掉
+  打开 Obsidian → 设置（左下角齿轮）→ 第三方插件 → 已安装插件
+  找到 "Xiaohongshu Importer"，点右边那个紫色开关，把它关掉（变灰）
+
+
+【第二步】找到插件的文件夹
+  位置是：  <你的 Obsidian 库文件夹>/.obsidian/plugins/xiaohongshu-importer/
+
+  Mac 用户：
+    1. 打开「访达」
+    2. 按 Command + Shift + G，粘贴下面这行（把 "你的库" 换成你的库名字）：
+         ~/Documents/你的库/.obsidian/plugins/xiaohongshu-importer
+    3. 回车就能直接进到那个文件夹
+
+  Windows 用户：
+    1. 打开「文件资源管理器」
+    2. 地址栏粘贴：
+         D:\你的库\.obsidian\plugins\xiaohongshu-importer
+       （如果你库在别的盘，把 D: 换成对应盘符）
+    3. 看不到 .obsidian 的话：点顶部「查看」→ 勾上「隐藏的项目」
+
+  文件夹里应该能看到这几个文件：main.js、manifest.json、styles.css、data.json
+
+
+【第三步】替换文件（重要：先备份）
+  1. 先把里面的 main.js 改个名字，叫 main.js.bak（这就是备份，以后想还原就改回来）
+  2. 把补丁包里的 main.js 拖进这个文件夹
+  3. 完成
+
+
+【第四步】重新打开插件
+  回到 Obsidian → 设置 → 第三方插件 → 把 "Xiaohongshu Importer" 的开关重新打开
+  然后拿一条小红书链接试一下：正文、图片、视频应该都能进来了
+
+
+【出问题了怎么办】
+  还原：把 main.js.bak 改回 main.js，覆盖掉补丁，开关关一下再打开，就回到原样。
+  常见情况：
+   - 提示"链接已过期"：说明复制的那条链接放太久了，重新从小红书 App 复制一条新的。
+   - 图片还是下不来：确认导入弹窗里 "Download media locally" 那个勾是勾上的。
+   - 插件列表里版本号还是 1.1.3：正常，版本号不影响功能，能用就行。
+
+
+补丁来源：https://github.com/vivilin826/obsidian-xhs-importer-patched
+原作者：bnchiang96（MIT 协议），本补丁 MIT 开源。
