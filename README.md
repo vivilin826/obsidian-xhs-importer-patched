@@ -4,6 +4,8 @@
 
 这是 [bnchiang96/xiaohongshu-importer](https://github.com/bnchiang96/xiaohongshu-importer) 的补丁版本（MIT 协议，原作者署名见 `LICENSE`）。原版在 2026 年小红书改版后失效：正文还能进来，图片和视频全部丢失，本仓库针对这一点做了修复。
 
+> **直接下载**：[点这里下载 `xhs-importer-patch.zip`](https://github.com/vivilin826/obsidian-xhs-importer-patched/releases/download/1.2.0/xhs-importer-patch.zip)（内含 `main.js` + `INSTALL.txt`，解压照着做即可）
+
 ## 最快安装：只替换一个文件（推荐给已装原版的人）
 
 如果你**已经装了原版** `Xiaohongshu Importer`，不需要卸载也不需要重装，设置都会保留：
