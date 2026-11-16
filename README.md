@@ -1,10 +1,21 @@
 # Xiaohongshu Importer (Patched)
 
-把小红书笔记**正文、图片、视频**一起存进 Obsidian 的插件。
+把小红书笔记**正文、图片、视频**，以及抖音作品**文案、图片、视频**一起存进 Obsidian 的插件。
 
 这是 [bnchiang96/xiaohongshu-importer](https://github.com/bnchiang96/xiaohongshu-importer) 的补丁版本（MIT 协议，原作者署名见 `LICENSE`）。原版在 2026 年小红书改版后失效：正文还能进来，图片和视频全部丢失，本仓库针对这一点做了修复。
 
-> **直接下载**：[点这里下载 `xhs-importer-patch.zip`](https://github.com/vivilin826/obsidian-xhs-importer-patched/releases/download/1.2.0/xhs-importer-patch.zip)（内含 `main.js` + `INSTALL.txt`，解压照着做即可）
+> **直接下载**：[点这里下载 `xhs-importer-patch.zip`](https://github.com/vivilin826/obsidian-xhs-importer-patched/releases/download/1.3.0/xhs-importer-patch.zip)（内含 `main.js` + `INSTALL.txt`，解压照着做即可）
+
+## 抖音支持（1.3.0 新增）
+
+博主的抖音作品也能直接导入，自动区分两种形态：
+
+- **视频**：存无水印 `mp4`（自动把 `playwm` 换成 `play`）+ 封面图，以 `<video controls>` 内嵌；
+- **图文**：逐张存图片，按 `作品ID-00.webp` 编号，正文文案完整保留（含话题）。
+
+链接形式都认：`v.douyin.com/xxx` 短链、`douyin.com/video/<id>`、`douyin.com/note/<id>`，粘一整段分享文字也行。
+
+**抖音需要一次登录 Cookie**（这点和小红书不同）：抖音的内容接口全部要签名，匿名的分享页只剩空壳。做法是在插件设置 →「抖音 Cookie」里粘一行，取一次能用很久。仓库里附了 `更新抖音Cookie.command` 脚本（Mac，双击运行，自动从 Chrome 读出登录 Cookie 写进配置）。Cookie 过期时导入会明确提示，重新跑一次脚本即可。
 
 ## 最快安装：只替换一个文件（推荐给已装原版的人）
 
