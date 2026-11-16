@@ -228,10 +228,20 @@ var XiaohongshuImporter = class extends ob.Plugin {
 		return /douyin\.com/.test(url);
 	}
 
-	/* 统一入口：按域名分派到小红书 / 抖音 */
+	/* 统一入口：按域名分派到小红书 / 抖音，并按平台自动纠正分类（小红书类 / 抖音类） */
 	async importAny(url, category, downloadMedia) {
-		if (this.isDouyinUrl(url)) return this.importDouyinNote(url, category, downloadMedia);
-		return this.importXHSNote(url, category, downloadMedia);
+		const isDy = this.isDouyinUrl(url);
+		const cats = this.settings.categories || [];
+		let cat = category;
+		if (isDy && cats.includes("抖音类") && cat !== "抖音类") {
+			cat = "抖音类";
+			new ob.Notice("这是抖音链接，自动存到「抖音类」。", 3000);
+		} else if (!isDy && cats.includes("小红书类") && cat !== "小红书类") {
+			cat = "小红书类";
+			new ob.Notice("这是小红书链接，自动存到「小红书类」。", 3000);
+		}
+		if (isDy) return this.importDouyinNote(url, cat, downloadMedia);
+		return this.importXHSNote(url, cat, downloadMedia);
 	}
 
 	/* ---------- 抓取 ---------- */
