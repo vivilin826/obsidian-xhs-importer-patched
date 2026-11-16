@@ -1,15 +1,14 @@
 /*
- * Xiaohongshu Importer (Patched)
- * Original author: bnchiang96 (MIT) — https://github.com/bnchiang96/xiaohongshu-importer
- * Patched build: v1.2.0 by vivilin826
+ * Xiaohongshu Importer plugin
+ * Original author: bnchiang96 (MIT)
+ * Patched build: v1.2.0
  *
- * 改动要点（针对 2026 年小红书分享页改版）：
- *  1. 用 iPhone UA 访问 discovery/item + xsec_source=app_share，不跳登录、无需 Cookie
- *  2. 主解析路径改为 noteData.data.noteData，保留 noteDetailMap / og 兜底
- *  3. 图片取 infoList 的 H5_DTL（1080 大图），http 自动升 https
- *  4. 视频 h264 → h265 → av1 → originVideoKey 逐级兜底，下载带 Referer
- *  5. 下载通道：requestUrl 失败自动切 Node https 流式下载
- *  6. 链接过期（跳 /404/）时明确报错，不生成空笔记
+ * 改动要点：
+ *  1. 抓取改为 requestUrl + 真实请求头（UA / Referer / Accept-Language），可选 Cookie
+ *  2. 短链 xhslink.com 跟随重定向并保留 xsec_token
+ *  3. 解析加三层兜底：INITIAL_STATE → og 元信息 → 页面正文选择器
+ *  4. 媒体下载带 Referer（修复 xhscdn 403），支持视频 masterUrl / originVideoKey
+ *  5. 媒体文件名改用 noteId 前缀，避免中文名 + 时间戳堆叠
  */
 
 var F = Object.defineProperty;
@@ -43,6 +42,8 @@ const DEFAULT_SETTINGS = {
 	cookie: "",
 	downloadVideo: !0,
 	debug: !1,
+	/* 抖音：登录 Cookie（缺了只能拿到极少数公开作品） */
+	douyinCookie: "",
 };
 
 /* ---------------- 工具函数 ---------------- */
@@ -169,23 +170,23 @@ var XiaohongshuImporter = class extends ob.Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.addRibbonIcon("book", "Import Xiaohongshu note", async () => {
+		this.addRibbonIcon("book", "Import Xiaohongshu / Douyin note", async () => {
 			const input = await this.promptForShareText();
 			if (!input || !input.text) return;
 			const url = this.extractURL(input.text);
-			if (!url) return void new ob.Notice("没有识别到小红书链接，请粘贴 App 里的整段分享文字。");
-			await this.importXHSNote(url, input.category, input.downloadMedia);
+			if (!url) return void new ob.Notice("没有识别到链接，请粘贴小红书或抖音 App 里的整段分享文字。");
+			await this.importAny(url, input.category, input.downloadMedia);
 		});
 
 		this.addCommand({
 			id: "import",
-			name: "Import Xiaohongshu note",
+			name: "Import Xiaohongshu / Douyin note",
 			callback: async () => {
 				const input = await this.promptForShareText();
 				if (!input || !input.text) return;
 				const url = this.extractURL(input.text);
-				if (!url) return void new ob.Notice("没有识别到小红书链接，请粘贴 App 里的整段分享文字。");
-				await this.importXHSNote(url, input.category, input.downloadMedia);
+				if (!url) return void new ob.Notice("没有识别到链接，请粘贴小红书或抖音 App 里的整段分享文字。");
+				await this.importAny(url, input.category, input.downloadMedia);
 			},
 		});
 
@@ -205,19 +206,32 @@ var XiaohongshuImporter = class extends ob.Plugin {
 		});
 	}
 
-	/* 支持 xhslink 短链 / explore / discovery 三种形式，保留 query（xsec_token 在里面） */
+	/* 支持 xhslink 短链 / explore / discovery / 抖音短链与作品页 */
 	extractURL(text) {
 		const t = cleanUrl(text.trim());
 		const patterns = [
 			/https?:\/\/xhslink\.com\/[a-zA-Z0-9\/]+(?:\?[^\s,，]*)?/,
 			/https?:\/\/xhslink\.cn\/[a-zA-Z0-9\/]+(?:\?[^\s,，]*)?/,
 			/https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item|item)\/[0-9a-zA-Z]+(?:\?[^\s,，]*)?/,
+			/https?:\/\/v\.douyin\.com\/[A-Za-z0-9_\-]+\/?/,
+			/https?:\/\/(?:www\.)?douyin\.com\/(?:video|note)\/\d+/,
+			/https?:\/\/(?:www\.)?iesdouyin\.com\/share\/(?:video|note)\/\d+/,
 		];
 		for (const p of patterns) {
 			const m = t.match(p);
 			if (m) return m[0];
 		}
 		return null;
+	}
+
+	isDouyinUrl(url) {
+		return /douyin\.com/.test(url);
+	}
+
+	/* 统一入口：按域名分派到小红书 / 抖音 */
+	async importAny(url, category, downloadMedia) {
+		if (this.isDouyinUrl(url)) return this.importDouyinNote(url, category, downloadMedia);
+		return this.importXHSNote(url, category, downloadMedia);
 	}
 
 	/* ---------- 抓取 ---------- */
@@ -384,19 +398,32 @@ var XiaohongshuImporter = class extends ob.Plugin {
 		const tmp = pathMod.join(os.tmpdir(), `xhs-${Date.now()}-${Math.random().toString(36).slice(2)}.bin`);
 
 		await new Promise((resolve, reject) => {
-			const req = lib.get(url, { headers }, (res) => {
-				if (res.statusCode !== 200) {
-					res.resume();
-					reject(new Error(`HTTP ${res.statusCode}`));
-					return;
-				}
-				const ws = fs.createWriteStream(tmp);
-				res.pipe(ws);
-				ws.on("finish", () => resolve());
-				ws.on("error", reject);
-			});
-			req.on("error", reject);
-			req.setTimeout(90000, () => req.destroy(new Error("timeout 90s")));
+			const go = (u, depth) => {
+				if (depth > 6) return reject(new Error("too many redirects"));
+				const req = lib.get(u, { headers }, (res) => {
+					const loc = res.headers.location;
+					if (loc && res.statusCode >= 300 && res.statusCode < 400) {
+						res.resume();
+						try {
+							return go(new URL(loc, u).toString(), depth + 1);
+						} catch (e) {
+							return reject(e);
+						}
+					}
+					if (res.statusCode !== 200) {
+						res.resume();
+						reject(new Error(`HTTP ${res.statusCode}`));
+						return;
+					}
+					const ws = fs.createWriteStream(tmp);
+					res.pipe(ws);
+					ws.on("finish", () => resolve());
+					ws.on("error", reject);
+				});
+				req.on("error", reject);
+				req.setTimeout(120000, () => req.destroy(new Error("timeout 120s")));
+			};
+			go(url, 0);
 		});
 
 		const buf = fs.readFileSync(tmp);
@@ -459,6 +486,243 @@ var XiaohongshuImporter = class extends ob.Plugin {
 		if (/gif/i.test(ct)) return "gif";
 		if (/jpe?g/i.test(ct)) return "jpg";
 		return fallback;
+	}
+
+	/* ---------- 抖音：移动端分享页 + 登录 Cookie（页面里有 SSR 数据，无需签名接口） ---------- */
+
+	DY_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
+	/* 取文本：先走 Obsidian requestUrl，失败再用 Node 兜底 */
+	async fetchText(url, headers) {
+		try {
+			const res = await ob.requestUrl({ url, method: "GET", headers, throw: !1 });
+			if (res.status === 200 && res.text) return res.text;
+		} catch (e) {}
+		const lib = url.startsWith("https:") ? require("https") : require("http");
+		return await new Promise((resolve, reject) => {
+			const req = lib.get(url, { headers }, (res) => {
+				if (res.statusCode !== 200) {
+					res.resume();
+					return reject(new Error(`HTTP ${res.statusCode}`));
+				}
+				let body = "";
+				res.setEncoding("utf8");
+				res.on("data", (d) => (body += d));
+				res.on("end", () => resolve(body));
+			});
+			req.on("error", reject);
+			req.setTimeout(25000, () => req.destroy(new Error("timeout")));
+		});
+	}
+
+	/* 跟随 302 取最终落地地址（v.douyin.com 短链 → 作品页） */
+	async resolveRedirect(url) {
+		const lib = url.startsWith("https:") ? require("https") : require("http");
+		const headers = { "User-Agent": this.DY_UA };
+		const hop = (u, depth) =>
+			new Promise((resolve, reject) => {
+				if (depth > 6) return resolve(u);
+				const req = lib.get(u, { headers }, (res) => {
+					const loc = res.headers.location;
+					res.resume();
+					if (loc && res.statusCode >= 300 && res.statusCode < 400) {
+						const next = new URL(loc, u).toString();
+						return hop(next, depth + 1).then(resolve, reject);
+					}
+					resolve(u);
+				});
+				req.on("error", reject);
+				req.setTimeout(20000, () => req.destroy(new Error("timeout")));
+			});
+		try {
+			return await hop(url, 0);
+		} catch (e) {
+			return url;
+		}
+	}
+
+	/* 配对大括号抠出 window._ROUTER_DATA 的 JSON */
+	extractRouterData(html) {
+		const idx = html.indexOf("_ROUTER_DATA");
+		if (idx < 0) return null;
+		const start = html.indexOf("{", idx);
+		if (start < 0) return null;
+		let depth = 0,
+			inStr = false,
+			esc = false;
+		for (let i = start; i < html.length; i++) {
+			const ch = html[i];
+			if (inStr) {
+				if (esc) esc = false;
+				else if (ch === "\\") esc = true;
+				else if (ch === '"') inStr = false;
+				continue;
+			}
+			if (ch === '"') inStr = true;
+			else if (ch === "{") depth++;
+			else if (ch === "}") {
+				depth--;
+				if (depth === 0) {
+					try {
+						return JSON.parse(html.slice(start, i + 1));
+					} catch (e) {
+						return null;
+					}
+				}
+			}
+		}
+		return null;
+	}
+
+	/* 抖音图片常是 WebP 却挂在 .jpg 名字上，按文件头判断真实格式 */
+	sniffExt(ab) {
+		const u8 = new Uint8Array(ab.slice(0, 12));
+		if (u8[0] === 0xff && u8[1] === 0xd8) return ".jpg";
+		if (u8[0] === 0x89 && u8[1] === 0x50) return ".png";
+		if (u8[0] === 0x47 && u8[1] === 0x49) return ".gif";
+		const head = String.fromCharCode(u8[0], u8[1], u8[2], u8[3]);
+		const webp = String.fromCharCode(u8[8], u8[9], u8[10], u8[11]);
+		if (head === "RIFF" && webp === "WEBP") return ".webp";
+		return ".jpg";
+	}
+
+	douyinId(url) {
+		const m =
+			url.match(/(?:video|note|slides)\/(\d{15,})/) ||
+			url.match(/share\/(?:video|note)\/(\d{15,})/) ||
+			url.match(/(\d{17,19})/);
+		return m ? m[1] : null;
+	}
+
+	async importDouyinNote(url, category, downloadMedia) {
+		const notice = (m, t) => new ob.Notice(m, t);
+		const pathMod = require("path");
+		try {
+			try {
+				await this.loadSettings();
+			} catch (e) {}
+			notice("正在解析抖音链接…", 3000);
+
+			let real = url;
+			if (/v\.douyin\.com/.test(url)) real = await this.resolveRedirect(url);
+			const id = this.douyinId(real) || this.douyinId(url);
+			if (!id) return void notice("没能从这条链接里认出作品 ID，换一条完整的链接试试。", 8000);
+
+			const headers = {
+				"User-Agent": this.DY_UA,
+				Referer: "https://www.douyin.com/",
+				"Accept-Language": "zh-CN,zh;q=0.9",
+			};
+			if (this.settings.douyinCookie) headers.Cookie = this.settings.douyinCookie;
+
+			const html = await this.fetchText(`https://www.iesdouyin.com/share/video/${id}/`, headers);
+			const router = this.extractRouterData(html);
+			const page = (router && router.loaderData && (router.loaderData["video_(id)/page"] || router.loaderData["note_(id)/page"])) || {};
+			const list = (page.videoInfoRes && page.videoInfoRes.item_list) || [];
+			const item = list[0];
+
+			if (!item) {
+				const hint = this.settings.douyinCookie
+					? "分享页没有返回数据：作品可能已删除/受限，或 Cookie 过期了（重新取一次 Cookie 即可）"
+					: "抖音现在要登录 Cookie 才能拿到内容：插件设置 →「抖音 Cookie」填一行即可";
+				return void notice(`抖音导入失败：${hint}`, 12000);
+			}
+
+			const desc = (item.desc || "").trim();
+			const author = (item.author && item.author.nickname) || "";
+			let title = (desc.split("\n")[0] || "").replace(/#[^#\s]{1,30}/g, "").trim();
+			if (!title) title = `抖音作品 ${id}`;
+			title = title.slice(0, 80);
+
+			const images = (item.images || []).map((im) => (im.url_list || [])[0]).filter(Boolean);
+			const rawVideo = (item.video && item.video.play_addr && (item.video.play_addr.url_list || [])[0]) || "";
+			const videoUrl = rawVideo ? rawVideo.replace("/playwm/", "/play/") : "";
+			const coverUrl = (item.video && item.video.cover && (item.video.cover.url_list || [])[0]) || "";
+
+			const base = this.settings.defaultFolder || "";
+			const mediaFolder = base ? `${base}/media` : "media";
+			const noteFolder = base ? `${base}/${category || "Uncategorized"}` : category || "Uncategorized";
+			await this.ensureFolder(noteFolder);
+			if (downloadMedia) await this.ensureFolder(mediaFolder);
+
+			const fileBase = safeName(title, 60) || `抖音作品-${id}`;
+			let notePath = ob.normalizePath(`${noteFolder}/${fileBase}.md`);
+			let n = 1;
+			while (await this.app.vault.adapter.exists(notePath)) {
+				notePath = ob.normalizePath(`${noteFolder}/${fileBase}-${n}.md`);
+				n++;
+				if (n > 50) break;
+			}
+
+			const lines = [];
+			const errs = [];
+			const dlHeaders = Object.assign({}, headers, { Accept: "*/*" });
+
+			if (downloadMedia) {
+				if (images.length) {
+					for (let i = 0; i < images.length; i++) {
+						try {
+							const ab = await this.downloadViaNode(images[i], dlHeaders);
+							const name = `${id}-${String(i).padStart(2, "0")}${this.sniffExt(ab)}`;
+							await this.app.vault.adapter.writeBinary(ob.normalizePath(`${mediaFolder}/${name}`), ab);
+							lines.push(`![图${i + 1}](../media/${name})`);
+						} catch (e) {
+							errs.push(`图${i + 1}: ${e.message}`);
+						}
+					}
+				} else if (videoUrl) {
+					try {
+						const ab = await this.downloadViaNode(videoUrl, dlHeaders);
+						const name = `${id}-video.mp4`;
+						await this.app.vault.adapter.writeBinary(ob.normalizePath(`${mediaFolder}/${name}`), ab);
+						lines.push(`<video controls src="../media/${name}" width="100%"></video>`);
+					} catch (e) {
+						errs.push(`视频: ${e.message}`);
+						lines.push(`[视频下载失败，点原链接](${url})`);
+					}
+					if (coverUrl) {
+						try {
+							const ab = await this.downloadViaNode(coverUrl, dlHeaders);
+							const name = `${id}-cover${this.sniffExt(ab)}`;
+							await this.app.vault.adapter.writeBinary(ob.normalizePath(`${mediaFolder}/${name}`), ab);
+						} catch (e) {}
+					}
+				}
+			} else {
+				lines.push(`[原链接](${url})`);
+			}
+
+			if (errs.length) await this.logDownloadFailure(mediaFolder, errs);
+
+			const today = new Date().toISOString().split("T")[0];
+			const type = images.length ? "images" : videoUrl ? "video" : "unknown";
+			let content = "---\n";
+			content += `title: "${title.replace(/"/g, "'")}"\n`;
+			content += `source: ${url}\n`;
+			content += `platform: douyin\n`;
+			content += `type: ${type}\n`;
+			if (author) content += `author: "${author.replace(/"/g, "'")}"\n`;
+			content += `date: ${today}\n`;
+			content += `category: ${category || "Uncategorized"}\n`;
+			content += "---\n\n";
+			content += `# ${title}\n\n`;
+			content += `${desc || "（无文案）"}\n\n`;
+			if (lines.length) content += lines.join("\n\n") + "\n\n";
+			content += `原链接：${url}\n`;
+
+			await this.app.vault.create(notePath, content);
+			const file = this.app.vault.getAbstractFileByPath(notePath);
+			if (file) await this.app.workspace.getLeaf(!0).openFile(file);
+
+			this.settings.lastCategory = category;
+			await this.saveSettings();
+
+			const what = images.length ? `${images.length} 张图` : videoUrl ? "视频" : "仅文案";
+			notice(`抖音导入完成：${fileBase}（${what}${errs.length ? "，部分媒体失败看日志" : ""}）`, 6000);
+		} catch (e) {
+			console.log("[DY] 异常:", e);
+			notice(`抖音导入失败：${e.message}`, 12000);
+		}
 	}
 
 	/* ---------- 主流程 ---------- */
@@ -657,6 +921,25 @@ var XiaohongshuSettingTab = class extends ob.PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
+
+		new ob.Setting(containerEl).setName("抖音").setHeading();
+		containerEl.createEl("p", {
+			text: "抖音内容接口要签名，纯匿名抓不到，所以要一行登录 Cookie。取一次能长期用，失效了重新取。",
+		});
+
+		new ob.Setting(containerEl)
+			.setName("抖音 Cookie（必需）")
+			.setDesc("Chrome 登录 douyin.com → F12 → Network → 任意一条请求 → 右键 Copy as cURL，把整行贴进配置文件；或直接粘 Cookie 那一行。")
+			.addTextArea((t) => {
+				t.setPlaceholder("ttwid=...; passport_csrf_token=...; sessionid=...; ...")
+					.setValue(this.plugin.settings.douyinCookie || "")
+					.onChange(async (v) => {
+						this.plugin.settings.douyinCookie = v.trim();
+						await this.plugin.saveSettings();
+					});
+				t.inputEl.rows = 5;
+				t.inputEl.style.width = "100%";
+			});
 
 		new ob.Setting(containerEl).setName("分类").setHeading();
 		containerEl.createEl("p", { text: "导入时可选分类，对应文件夹名。" });
